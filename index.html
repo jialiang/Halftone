@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Halftone Generator</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Roboto&display=swap" rel="stylesheet" />
+
+    <style>
+      html {
+        font-family: "Roboto", sans-serif;
+        width: 100%;
+        height: 100%;
+      }
+
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 2rem;
+      }
+
+      label > div {
+        font-size: 0.9rem;
+        color: #333;
+      }
+
+      input {
+        font-size: 1.15rem;
+        display: block;
+        box-sizing: border-box;
+        width: 100%;
+        margin-top: 0.5rem;
+        padding: 0.5rem 0.25rem;
+        border: 1px solid #ddd;
+        border-radius: 0.25rem;
+        background: white;
+      }
+
+      button {
+        font-size: 1.15rem;
+        display: block;
+        width: 100%;
+        padding: 0.25rem;
+        margin-bottom: 1rem;
+      }
+
+      #container {
+        display: flex;
+        width: 100%;
+        height: 100%;
+      }
+
+      #controls {
+        width: 15rem;
+        padding: 1rem;
+        border-right: 1px solid #ddd;
+      }
+
+      #result-container {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+      }
+
+      #result {
+        display: block;
+        max-width: calc(100% - 2rem);
+        max-height: calc(100% - 2rem);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="container">
+      <form id="controls">
+        <label>
+          <div>Upload Image</div>
+          <input id="image-upload" type="file" accept="image/*" />
+        </label>
+        <label>
+          <div>Block Size (px)</div>
+          <input id="block-size" type="number" min="1" max="32" value="8" />
+        </label>
+        <label>
+          <div>Size Floor (% of block size)</div>
+          <input id="min-percent" type="number" min="0" max="50" value="10" />
+        </label>
+        <label>
+          <div>Size Ceiling (% of block size)</div>
+          <input id="max-percent" type="number" min="1" max="200" value="90" />
+        </label>
+        <label>
+          <div>Scale (% of block size)</div>
+          <input id="scale-percent" type="number" min="50" max="200" value="100" />
+        </label>
+        <button id="reset" type="reset">Reset</button>
+        <button id="download" onclick="downloadURI()">Download</button>
+      </form>
+
+      <div id="result-container">
+        <img id="result" src="" alt="Result" />
+      </div>
+    </div>
+
+    <script>
+      const desaturate = (rgb, mode = "hsi") => {
+        const [r, g, b] = rgb;
+
+        if (mode === "luma") return 0.21 * r + 0.72 * g + 0.07 * b;
+        if (mode === "lightness") return 0.5 * (max(r, g, b) + min(r, g, b));
+        if (mode === "hsi") return (r + g + b) / 3;
+        if (mode === "hsv") return max(r, g, b);
+      };
+
+      const imageUpload = document.getElementById("image-upload");
+      const result = document.getElementById("result");
+
+      let lastResultObjectUrl = "";
+      let downloadFilename = "";
+
+      const process = () => {
+        const imageFile = imageUpload.files[0];
+
+        if (!imageFile) return;
+
+        URL.revokeObjectURL(lastResultObjectUrl);
+
+        downloadFilename = imageFile.name + ".svg";
+
+        const image = new Image();
+        const imageObjectUrl = URL.createObjectURL(imageFile);
+
+        image.src = imageObjectUrl;
+        image.onload = () => {
+          URL.revokeObjectURL(imageObjectUrl);
+
+          const blockSizeInput = document.getElementById("block-size");
+          const minSizeInput = document.getElementById("min-percent");
+          const maxSizeInput = document.getElementById("max-percent");
+          const scaleInput = document.getElementById("scale-percent");
+
+          const blockSize = parseInt(blockSizeInput.value);
+          const blockRadius = blockSize / 2;
+          const minRadius = (blockRadius * parseInt(minSizeInput.value)) / 100;
+          const maxRadius = (blockRadius * parseInt(maxSizeInput.value)) / 100;
+          const scaleSize = parseInt(scaleInput.value) / 100;
+
+          const canvas = document.createElement("canvas");
+          const context = canvas.getContext("2d", { alpha: false });
+
+          canvas.width = image.width / blockSize;
+          canvas.height = image.height / blockSize;
+
+          context.fillStyle = "white";
+
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+          const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+          const pixels = imageData.data;
+
+          let svg = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="${image.width}" height="${image.height}">
+              <defs>
+                <linearGradient id="gradient" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stop-color="#fafabc"/>
+                  <stop offset="25%" stop-color="#a8eda5"/>
+                  <stop offset="50%" stop-color="#8cedf6" />
+                  <stop offset="75%" stop-color="#b791de"/>
+                  <stop offset="100%" stop-color="#f993e4"/>
+                </linearGradient>
+                <mask id="hole">
+                  <rect width="100%" height="100%" fill="white"/>
+          `;
+
+          for (let i = 0; i < pixels.length; i += 4) {
+            const r = pixels[i + 0];
+            const g = pixels[i + 1];
+            const b = pixels[i + 2];
+            const brightness = desaturate([r, g, b]);
+
+            const pixelIndex = i / 4;
+
+            const xPos = pixelIndex % canvas.width;
+            const yPos = Math.floor(pixelIndex / canvas.width);
+
+            let x = xPos * blockSize + blockRadius;
+            let y = yPos * blockSize + blockRadius;
+
+            if (yPos % 2 === 0) x += blockRadius;
+
+            let size = ((1 - brightness / 255) * blockSize) / 2;
+            size *= scaleSize;
+            size = Math.min(Math.max(size, minRadius), maxRadius);
+            size = Math.round(size * 100) / 100;
+
+            svg += `<circle cx="${x}" cy="${y}" r="${size}" />`;
+          }
+
+          svg += `
+                </mask>
+              </defs>
+              <rect width="100%" height="100%" fill="url(#gradient)" />
+              <rect width="100%" height="100%" mask="url(#hole)" fill="white" />
+            </svg>
+          `;
+
+          const resultBlob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+
+          lastResultObjectUrl = URL.createObjectURL(resultBlob);
+
+          result.src = lastResultObjectUrl;
+        };
+      };
+
+      const inputs = document.querySelectorAll("input");
+
+      for (let i = 0; i < inputs.length; i++) inputs[i].onchange = process;
+
+      document.getElementById("download").onclick = (e) => {
+        e.preventDefault();
+
+        const link = document.createElement("a");
+        link.download = downloadFilename;
+        link.href = lastResultObjectUrl;
+
+        document.body.appendChild(link);
+        link.click();
+
+        document.body.removeChild(link);
+        delete link;
+      };
+    </script>
+  </body>
+</html>
